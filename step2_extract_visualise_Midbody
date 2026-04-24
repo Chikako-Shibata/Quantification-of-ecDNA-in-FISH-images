@@ -1,0 +1,136 @@
+
+parentInputDir = getDirectory("Select input directory");
+parentOutputDir = getDirectory("Select output directory");
+
+// parameter
+thresholdValue = 50; 
+
+folderList = getFileList(parentInputDir);
+setBatchMode(true); 
+
+for (f = 0; f < folderList.length; f++) {
+    if (File.isDirectory(parentInputDir + folderList[f])) {
+        
+        subFolderName = folderList[f];
+        inputDir = parentInputDir + subFolderName;
+        
+        outDir = parentOutputDir + subFolderName;
+        File.makeDirectory(outDir);
+        
+        print("Processing Folder: " + subFolderName);
+        
+        fileList = getFileList(inputDir);
+        
+        for (i = 0; i < fileList.length; i++) {
+            
+            if (endsWith(fileList[i], "C3.tif") || endsWith(fileList[i], "C3.TIF")) {
+                
+                c3File = fileList[i];
+                c1File = replace(c3File, "C3", "C1");
+                c2File = replace(c3File, "C3", "C2");
+
+                if (File.exists(inputDir + c1File) && File.exists(inputDir + c2File) && File.exists(inputDir + c3File)) {
+                    print("  -> Image: " + c3File);
+
+                    // ==========================================
+                    // Step 1: Extract midbodies
+                    // ==========================================
+                    open(inputDir + c3File);
+                    c3MaskTitle = getTitle();
+                    
+                    run("8-bit");
+                    run("Gaussian Blur...", "sigma=1.0"); 
+                    
+                    setThreshold(thresholdValue, 255);
+                    setOption("BlackBackground", false);
+                    run("Convert to Mask");
+                    
+                    run("Set Measurements...", "centroid redirect=None decimal=3");
+                    run("Analyze Particles...", "size=0-Infinity circularity=0.00-1.00 clear add");
+                    
+                    roiN = roiManager("count");
+                    run("Clear Results");
+                    
+                    baseName = replace(c3File, ".tif", "");
+                    baseName = replace(baseName, ".TIF", "");
+
+                    if (roiN > 0) {
+                        for (j = 0; j < roiN; j++) {
+                            roiManager("Select", j);
+                            getSelectionBounds(xb, yb, wb, hb);
+                            xC = xb + wb/2.0; 
+                            yC = yb + hb/2.0;
+                            
+                            setResult("Midbody_ID", j, j+1);
+                            setResult("X", j, xC);
+                            setResult("Y", j, yC);
+                        }
+                        saveAs("Results", outDir + "Midbody_" + baseName + ".csv");
+                        
+                        selectWindow(c3MaskTitle);
+                        close();
+
+                        // ==========================================
+                        // Step 2: Create merged JPEG for inspection
+                        // ==========================================
+                        // C3 (Aurora B) -> Red
+                        open(inputDir + c3File);
+                        titleC3 = getTitle();
+                        run("Enhance Contrast", "saturated=0.1");
+                        run("8-bit");
+
+                        // C1 (DAPI) -> Blue
+                        open(inputDir + c1File);
+                        titleC1 = getTitle();
+                        run("Enhance Contrast", "saturated=0.1");
+                        run("8-bit");
+
+                        // C2 (ecDNA) -> Green
+                        open(inputDir + c2File);
+                        titleC2 = getTitle();
+                        run("Enhance Contrast", "saturated=0.1");
+                        run("8-bit");
+
+                        // merge
+                        run("Merge Channels...", "c1=["+titleC3+"] c2=["+titleC2+"] c3=["+titleC1+"] create");
+                        run("RGB Color");
+
+                        // Draw circles at detected coordinates
+                        setForegroundColor(255, 255, 0); // 黄色
+                        setLineWidth(10); 
+                        diameter = 100;
+                        radius = diameter / 2;
+
+                        for (j = 0; j < roiN; j++) {
+                            x = getResult("X", j);
+                            y = getResult("Y", j);
+                            makeOval(x - radius, y - radius, diameter, diameter);
+                            run("Draw", "slice");
+                        }
+                        
+                        run("Select None");
+                        saveAs("Jpeg", outDir + "Check_" + baseName + ".jpg");
+
+                    } else {
+                        print("    -> No midbody detected: " + c3File);
+                    }
+                    
+                    // Reset memory
+                    run("Close All");
+                    if(isOpen("ROI Manager")) { 
+                        roiManager("Reset"); 
+                    }
+                } else {
+                    print("    -> Missing channel images: " + c3File);
+                }
+            }
+        }
+    }
+}
+
+if(isOpen("ROI Manager")) { 
+    roiManager("Close"); 
+}
+
+setBatchMode(false);
+print("Done.");
