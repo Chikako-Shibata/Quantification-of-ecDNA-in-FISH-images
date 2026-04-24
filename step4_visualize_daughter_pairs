@@ -1,0 +1,132 @@
+// ======================================================
+// Generate JPEG images for daughter-cell pair inspection
+// ======================================================
+
+summaryPath = File.openDialog("Select All_Daughter_Cells_Pairs_Master.csv");
+parentNucCsvDir = getDirectory("Select directory containing Step 1 results");
+parentMbCsvDir = getDirectory("Select directory containing Step 2 results");
+parentImgDir = getDirectory("Select directory containing source images");
+parentOutDir = getDirectory("Select output directory");
+
+setBatchMode(true); 
+
+Table.open(summaryPath);
+tableName = File.getName(summaryPath);
+folders = Table.getColumn("Folder", tableName);
+images = Table.getColumn("Image", tableName);
+mbIDs = Table.getColumn("Midbody_ID", tableName);
+c1IDs = Table.getColumn("Cell1_ID", tableName);
+c2IDs = Table.getColumn("Cell2_ID", tableName);
+
+for (i = 0; i < images.length; i++) {
+    folderName = folders[i];
+    imgBase = images[i]; 
+    
+    print("Processing " + (i+1) + " / " + images.length + " : [" + folderName + "] " + imgBase);
+
+    nucCsvSubDir = parentNucCsvDir + folderName + File.separator;
+    mbCsvSubDir = parentMbCsvDir + folderName + File.separator;
+    imgSubDir = parentImgDir + folderName + File.separator;
+    outSubDir = parentOutDir + folderName + File.separator;
+
+    File.makeDirectory(outSubDir);
+    c3File = imgBase + ".tif";
+    if (!File.exists(imgSubDir + c3File)) c3File = imgBase + ".TIF"; 
+    
+    c1File = replace(c3File, "C3", "C1");
+    c2File = replace(c3File, "C3", "C2");
+    
+    resCsvName = "Results_" + replace(imgBase, "C3", "C1") + ".csv";
+    mbCsvName  = "Midbody_" + imgBase + ".csv";
+
+    // ==========================================
+    // Load coordinates
+    // ==========================================
+    if (File.exists(nucCsvSubDir + resCsvName)) {
+        Table.open(nucCsvSubDir + resCsvName);
+        xC1 = Table.get("X", c1IDs[i] - 1, resCsvName);
+        yC1 = Table.get("Y", c1IDs[i] - 1, resCsvName);
+        xC2 = Table.get("X", c2IDs[i] - 1, resCsvName);
+        yC2 = Table.get("Y", c2IDs[i] - 1, resCsvName);
+        selectWindow(resCsvName);
+        run("Close");
+    } else {
+        print(" -> Nucleus CSV not found: " + nucCsvSubDir + resCsvName);
+        continue;
+    }
+
+    if (File.exists(mbCsvSubDir + mbCsvName)) {
+        Table.open(mbCsvSubDir + mbCsvName);
+        xMB = Table.get("X", mbIDs[i] - 1, mbCsvName);
+        yMB = Table.get("Y", mbIDs[i] - 1, mbCsvName);
+        selectWindow(mbCsvName);
+        run("Close");
+    } else {
+        print(" -> Midbody CSV not found: " + mbCsvSubDir + mbCsvName);
+        continue;
+    }
+
+    // ==========================================
+    // merge and annotate images
+    // ==========================================
+    if (File.exists(imgSubDir + c3File) && File.exists(imgSubDir + c1File) && File.exists(imgSubDir + c2File)) {
+        
+        open(imgSubDir + c3File);
+        titleC3 = getTitle();
+        run("Enhance Contrast", "saturated=0.1");
+        run("8-bit");
+
+        open(imgSubDir + c1File);
+        titleC1 = getTitle();
+        run("Enhance Contrast", "saturated=0.1");
+        run("8-bit");
+
+        open(imgSubDir + c2File);
+        titleC2 = getTitle();
+        run("Enhance Contrast", "saturated=0.1");
+        run("8-bit");
+
+        run("Merge Channels...", "c1=["+titleC3+"] c2=["+titleC2+"] c3=["+titleC1+"] create");
+        run("RGB Color");
+
+        setForegroundColor(255, 255, 0); 
+        setLineWidth(8); 
+        diameter = 100;
+        radius = diameter / 2;
+        makeOval(xC1 - radius, yC1 - radius, diameter, diameter);
+        run("Draw", "slice");
+        makeOval(xC2 - radius, yC2 - radius, diameter, diameter);
+        run("Draw", "slice");
+
+        setForegroundColor(255, 255, 255); 
+        setLineWidth(5);
+        mb_diameter = 40;
+        mb_radius = mb_diameter / 2;
+        makeOval(xMB - mb_radius, yMB - mb_radius, mb_diameter, mb_diameter);
+        run("Draw", "slice");
+
+        setLineWidth(3);
+        drawLine(xC1, yC1, xMB, yMB);
+        drawLine(xC2, yC2, xMB, yMB);
+
+        run("Select None");
+
+        saveName = "Check_"+ imgBase + "PairMB" + mbIDs[i]+".jpg";
+        saveAs("Jpeg", outSubDir + saveName);
+        
+    } else {
+        print(" -> Missing channel images: " + imgSubDir + c3File);
+    }
+    
+    // Reset memory
+    while (nImages > 0) {
+        close();
+    }
+}
+
+if (isOpen(tableName)) {
+    selectWindow(tableName);
+    run("Close"); 
+}
+setBatchMode(false);
+print("Done.");
