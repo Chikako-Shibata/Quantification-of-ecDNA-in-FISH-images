@@ -1,0 +1,38 @@
+import pandas as pd
+import glob
+import os
+
+parent_dir = "data/"
+output_file = os.path.join(parent_dir, "All_Nuclei_Green_Signals_Master.csv") 
+
+all_data = []
+
+subfolders = [f.path for f in os.scandir(parent_dir) if f.is_dir()]
+print(f"{len(subfolders)} folders found")
+
+for folder_path in subfolders:
+    folder_name = os.path.basename(folder_path)
+    csv_files = glob.glob(os.path.join(folder_path, "Results_*.csv"))
+    
+    for csv_file in csv_files:
+        try:
+            df = pd.read_csv(csv_file)
+            if df.empty:
+                continue
+            
+            image_name = os.path.basename(csv_file).replace("Results_", "").replace(".csv", "")
+            
+            df.insert(0, 'Folder', folder_name)
+            df.insert(1, 'Image', image_name)
+            
+            all_data.append(df)
+            
+        except Exception as e:
+            print(f"Read error: {csv_file} ({e})")
+
+if all_data:
+    merged_df = pd.concat(all_data, ignore_index=True)
+    merged_df.to_csv(output_file, index=False)
+    print("Done.")
+else:
+    print("Fail")
