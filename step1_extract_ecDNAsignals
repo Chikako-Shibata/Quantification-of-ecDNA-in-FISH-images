@@ -1,0 +1,115 @@
+
+parentInputDir = getDirectory("Select input directory");
+parentOutputDir = getDirectory("Select output directory");
+
+folderList = getFileList(parentInputDir);
+setBatchMode(true); 
+
+for (f = 0; f < folderList.length; f++) {
+    if (File.isDirectory(parentInputDir + folderList[f])) {
+        
+        subFolderName = folderList[f];
+        inputDir = parentInputDir + subFolderName;
+        
+        outDir = parentOutputDir + subFolderName;
+        File.makeDirectory(outDir);
+        
+        print("Processing Folder: " + subFolderName);
+        fileList = getFileList(inputDir);
+        
+        for (i = 0; i < fileList.length; i++) {
+            if (endsWith(fileList[i], "C1.tif") || endsWith(fileList[i], "C1.TIF")) {
+                
+                dapiFile = fileList[i];
+                greenFile = replace(dapiFile, "C1", "C2");
+                
+                if (File.exists(inputDir + greenFile)) {
+                    open(inputDir + dapiFile);
+                    dapiTitle = getTitle();
+                    open(inputDir + greenFile);
+                    greenTitle = getTitle();
+                    
+                    analyzeNucleiAndSignals(dapiTitle, greenTitle, outDir);
+                    
+                    run("Close All");
+                    if (isOpen("ROI Manager")) {
+                        roiManager("Reset");
+                        roiManager("Close");
+                    }
+                }
+            }
+        }
+    }
+}
+
+setBatchMode(false);
+print("Done.");
+
+// ======================================================
+// Analysis function: nucleus detection and signal quantification
+// ======================================================
+function analyzeNucleiAndSignals(dapiTitle, greenTitle, saveDir) {
+    // Parameter
+    dapiSigma = 2.0; greenSigma = 0.5; prominence = 20;
+    minSize = 0.1; maxSize = 1e12; thresholdMethod = "Otsu dark";
+
+    // --- 1. Detect nuclei from DAPI channel (C1)  ---
+    selectWindow(dapiTitle);
+    run("Duplicate...", "title=DAPI_work");
+    run("Gaussian Blur...", "sigma=" + dapiSigma);
+    setAutoThreshold(thresholdMethod);
+    setOption("BlackBackground", false);
+    run("Convert to Mask");
+    run("Watershed");
+    
+    run("Set Measurements...", "area mean min centroid integrated redirect=None decimal=3");
+    run("Analyze Particles...", "size=" + minSize + "-" + maxSize + " show=Nothing clear add");
+    
+    roiN = roiManager("count");
+    run("Clear Results");
+    
+    if (roiN > 0) {
+        for (j = 0; j < roiN; j++) {
+            roiManager("Select", j);
+            
+            getSelectionBounds(xb, yb, wb, hb);
+            xC = xb + wb/2.0; 
+            yC = yb + hb/2.0;
+            getStatistics(nucArea);
+
+            // --- 2. Measure signal intensity in original green channel (C2) ---
+            selectWindow(greenTitle);
+            roiManager("Select", j);
+            getStatistics(area_green, meanV, minV, maxV); 
+            intDenV = area_green * meanV; 
+
+            // --- 3. Count green signal foci using Find Maxima ---
+            selectWindow(greenTitle); 
+            run("Duplicate...", "title=tmp_green");
+            run("Gaussian Blur...", "sigma=" + greenSigma);
+            run("Clear Outside");
+            run("Find Maxima...", "noise=" + prominence + " output=[Point Selection]");
+            
+            n = 0;
+            if (selectionType == 10) {
+                getSelectionCoordinates(x, y);
+                n = lengthOf(x);
+            }
+            close();
+            
+            // --- 4. Export measurements ---
+            setResult("Nucleus_ID", j, j+1);
+            setResult("X", j, xC);
+            setResult("Y", j, yC);
+            setResult("Nucleus_Area", j, nucArea);
+            setResult("Maxima_count", j, n);
+            setResult("Green_Mean", j, meanV);
+            setResult("Green_Max", j, maxV);
+            setResult("Green_IntDen", j, intDenV);
+        }
+        
+        baseName = replace(dapiTitle, ".tif", "");
+        baseName = replace(baseName, ".TIF", "");
+        saveAs("Results", saveDir + "Results_" + baseName + ".csv");
+    }
+}
