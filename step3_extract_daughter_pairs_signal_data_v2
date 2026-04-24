@@ -1,0 +1,145 @@
+import pandas as pd
+import numpy as np
+import glob
+import os
+
+# Directory containing Step 1 outputs
+nucleus_parent_dir = "data/"  
+
+# Directory containing Step 2 outputs
+midbody_parent_dir = ""data/"  
+
+output_file = os.path.join(midbody_parent_dir, "All_Daughter_Cells_Pairs_Master_v2.csv") 
+
+# ==========================================
+# parameter
+# ==========================================
+MAX_DISTANCE = 85.0  
+MIN_ANGLE = 110.0    
+
+def calculate_angle(p1, p2, p3):
+    v1 = p1 - p2; v2 = p3 - p2
+    n1, n2 = np.linalg.norm(v1), np.linalg.norm(v2)
+    if n1 == 0 or n2 == 0: return 0.0
+    return np.degrees(np.arccos(np.clip(np.dot(v1, v2) / (n1 * n2), -1.0, 1.0)))
+
+all_results = []
+
+mb_subfolders = [f.path for f in os.scandir(midbody_parent_dir) if f.is_dir()]
+print(f"{len(mb_subfolders)} folders found")
+
+error_count = 0
+
+for mb_folder in mb_subfolders:
+    folder_name = os.path.basename(mb_folder)
+    
+    nuc_folder = os.path.join(nucleus_parent_dir, folder_name)
+    mb_files = glob.glob(os.path.join(mb_folder, "Midbody_*.csv"))
+    for mb_file in mb_files:
+        df_m = pd.read_csv(mb_file)
+        if df_m.empty: continue
+        
+        mb_basename = os.path.basename(mb_file)
+        nuc_basename = mb_basename.replace("Midbody_", "Results_").replace("C3", "C1")
+        nuc_file_path = os.path.join(nuc_folder, nuc_basename)
+        
+        if not os.path.exists(nuc_file_path):
+            print(f"Missing nucleus CSV: {nuc_file_path}")
+            error_count += 1
+            continue
+            
+        df_n = pd.read_csv(nuc_file_path)
+        if len(df_n) < 2: continue
+            
+        coords_n = df_n[['X', 'Y']].values
+        image_name = mb_basename.replace("Midbody_", "").replace(".csv", "")
+        
+        for _, row_m in df_m.iterrows():
+            mb_coord = np.array([row_m['X'], row_m['Y']])
+            dists = np.linalg.norm(coords_n - mb_coord, axis=1)
+            
+            nearest_idx = np.argsort(dists)[:2]
+            n1_idx, n2_idx = nearest_idx[0], nearest_idx[1]
+            dist1, dist2 = dists[n1_idx], dists[n2_idx]
+            
+            if dist1 <= MAX_DISTANCE and dist2 <= MAX_DISTANCE:
+                angle = calculate_angle(coords_n[n1_idx], mb_coord, coords_n[n2_idx])
+                
+                if angle >= MIN_ANGLE:
+                    n1_data = df_n.iloc[n1_idx]
+                    n2_data = df_n.iloc[n2_idx]
+                    
+                    d1_ecDNA = n1_data['Maxima_count'] if 'Maxima_count' in df_n.columns else np.nan
+                    d2_ecDNA = n2_data['Maxima_count'] if 'Maxima_count' in df_n.columns else np.nan
+                    d1_area = n1_data['Nucleus_Area'] if 'Nucleus_Area' in df_n.columns else np.nan
+                    d2_area = n2_data['Nucleus_Area'] if 'Nucleus_Area' in df_n.columns else np.nan
+                    d1_intden = n1_data['Green_IntDen'] if 'Green_IntDen' in df_n.columns else np.nan
+                    d2_intden = n2_data['Green_IntDen'] if 'Green_IntDen' in df_n.columns else np.nan
+                    
+                    d1_mean = n1_data['Green_Mean'] if 'Green_Mean' in df_n.columns else np.nan
+                    d2_mean = n2_data['Green_Mean'] if 'Green_Mean' in df_n.columns else np.nan
+                    d1_max = n1_data['Green_Max'] if 'Green_Max' in df_n.columns else np.nan
+                    d2_max = n2_data['Green_Max'] if 'Green_Max' in df_n.columns else np.nan
+                    
+                    if n1_data['X'] > n2_data['X']:
+                        n1_data, n2_data = n2_data, n1_data
+                        d1_ecDNA, d2_ecDNA = d2_ecDNA, d1_ecDNA
+                        d1_area, d2_area = d2_area, d1_area
+                        d1_intden, d2_intden = d2_intden, d1_intden
+                        d1_mean, d2_mean = d2_mean, d1_mean
+                        d1_max, d2_max = d2_max, d1_max
+                        dist1, dist2 = dist2, dist1
+
+                    all_results.append({
+                        'Folder': folder_name,
+                        'Image': image_name,
+                        'Midbody_ID': int(row_m['Midbody_ID']),
+                        'Angle': round(angle, 1),
+                        'Cell1_ID': int(n1_data['Nucleus_ID']),
+                        'Cell1_Area': d1_area,
+                        'Cell1_ecDNA': d1_ecDNA,
+                        'Cell1_Mean': round(d1_mean, 3) if not np.isnan(d1_mean) else np.nan, 
+                        'Cell1_Max': d1_max,   
+                        'Cell1_IntDen': round(d1_intden, 3) if not np.isnan(d1_intden) else np.nan,
+                        'Cell2_ID': int(n2_data['Nucleus_ID']),
+                        'Cell2_Area': d2_area,
+                        'Cell2_ecDNA': d2_ecDNA,
+                        'Cell2_Mean': round(d2_mean, 3) if not np.isnan(d2_mean) else np.nan, 
+                        'Cell2_Max': d2_max,   
+                        'Cell2_IntDen': round(d2_intden, 3) if not np.isnan(d2_intden) else np.nan
+                    })
+
+
+# --- # Remove duplicate and conflicting daughter-cell pairs ---
+if all_results:
+    df_results = pd.DataFrame(all_results)
+    
+    original_count = len(df_results)
+    df_results = df_results.sort_values(by=['Folder', 'Image', 'Angle'], ascending=[True, True, False])
+    filtered_results = []
+    
+    for (folder, image), group in df_results.groupby(['Folder', 'Image']):
+        used_cells = set()
+        
+        for _, row in group.iterrows():
+            c1 = row['Cell1_ID']
+            c2 = row['Cell2_ID']
+            
+            if c1 in used_cells or c2 in used_cells:
+                continue
+            filtered_results.append(row)
+            used_cells.add(c1)
+            used_cells.add(c2)
+            
+    df_results = pd.DataFrame(filtered_results)
+    df_results = df_results.reset_index(drop=True)
+    
+    dedup_count = original_count - len(df_results)
+
+    df_results.to_csv(output_file, index=False)
+    print(f"\nDone: {len(df_results)} daughter-cell pairs identified.")
+    if dedup_count > 0:
+        print(f"Removed {dedup_count} duplicate or conflicting pairs.")
+    print(f"Output file: {output_file}")
+else:
+    print(f"\nNo valid pairs found (skipped files: {error_count})")
